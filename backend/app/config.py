@@ -32,15 +32,10 @@ class Settings:
     video_seconds: int = int(os.getenv("VIDEO_SECONDS", "4"))
     frontend_origin: str = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
     alerts_enabled: bool = os.getenv("ALERTS_ENABLED", "true").lower() == "true"
-    whatsapp_enabled: bool = os.getenv("WHATSAPP_ENABLED", "false").lower() == "true"
-    whatsapp_access_token: str = os.getenv("WHATSAPP_ACCESS_TOKEN", "")
-    whatsapp_phone_number_id: str = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
-    whatsapp_graph_version: str = os.getenv("WHATSAPP_GRAPH_VERSION", "v21.0")
-    whatsapp_default_country_code: str = os.getenv("WHATSAPP_DEFAULT_COUNTRY_CODE", "591")
-    whatsapp_send_template_first: bool = os.getenv("WHATSAPP_SEND_TEMPLATE_FIRST", "true").lower() == "true"
-    whatsapp_template_name: str = os.getenv("WHATSAPP_TEMPLATE_NAME", "hello_world")
-    whatsapp_template_language: str = os.getenv("WHATSAPP_TEMPLATE_LANGUAGE", "en_US")
-    whatsapp_template_body_params: bool = os.getenv("WHATSAPP_TEMPLATE_BODY_PARAMS", "false").lower() == "true"
+    telegram_enabled: bool = os.getenv("TELEGRAM_ENABLED", "false").lower() == "true"
+    telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    telegram_bot_username: str = os.getenv("TELEGRAM_BOT_USERNAME", "")
+    telegram_parse_mode: str = os.getenv("TELEGRAM_PARSE_MODE", "HTML")
     red_alert_repeat_seconds: int = int(os.getenv("RED_ALERT_REPEAT_SECONDS", "30"))
     red_alert_max_repeats: int = int(os.getenv("RED_ALERT_MAX_REPEATS", "30"))
 

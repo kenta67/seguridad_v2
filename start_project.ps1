@@ -41,6 +41,11 @@ Assert-FileValue -Path $FrontendEnv -Name "VITE_SUPABASE_URL"
 Assert-FileValue -Path $FrontendEnv -Name "VITE_SUPABASE_ANON_KEY"
 Assert-FileValue -Path $FrontendEnv -Name "VITE_API_URL"
 
+$TelegramEnabled = Get-Content -LiteralPath $BackendEnv | Where-Object { $_ -eq "TELEGRAM_ENABLED=true" } | Select-Object -First 1
+if ($TelegramEnabled) {
+    Assert-FileValue -Path $BackendEnv -Name "TELEGRAM_BOT_TOKEN"
+}
+
 Stop-Port -Port 8001
 Stop-Port -Port 5173
 

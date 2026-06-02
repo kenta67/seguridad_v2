@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   FlaskConical,
   Eye,
+  FileText,
   ImageUp,
   KeyRound,
   LayoutDashboard,
@@ -22,6 +23,7 @@ import {
   Shield,
   Trash2,
   UserCheck,
+  UserCircle,
   Users,
   Video,
   X,
@@ -43,14 +45,37 @@ const emptyUser = {
   password: "",
   rol: "HIJOs",
   numero: "",
+  telegram_chat_id: "",
   activo: true,
+};
+
+const emptyProfile = {
+  nombres: "",
+  apellidos: "",
+  email: "",
+  usuario: "",
+  numero: "",
+  telegram_chat_id: "",
+  foto_perfil_url: "",
+  rol: "",
+};
+
+const defaultConfig = {
+  deteccion_personas: true,
+  deteccion_armas: true,
+  deteccion_armas_blancas: true,
+  deteccion_rostro_cubierto: true,
+  grabacion_automatica: true,
+  notificaciones_push: true,
 };
 
 const navItems = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { id: "usuarios", label: "Usuarios", icon: Users },
+  { id: "perfil", label: "Perfil", icon: UserCircle },
+  { id: "usuarios", label: "Usuarios", icon: Users, parentOnly: true },
   { id: "camaras", label: "Camaras", icon: Camera },
   { id: "eventos", label: "Eventos", icon: AlertTriangle },
+  { id: "logs", label: "Logs", icon: FileText, parentOnly: true },
   { id: "test", label: "Test IA", icon: FlaskConical },
   { id: "configuracion", label: "Configuracion", icon: Settings },
 ];
@@ -196,33 +221,48 @@ function Dashboard({ session }) {
   const [profile, setProfile] = useState(null);
   const [events, setEvents] = useState([]);
   const [users, setUsers] = useState([]);
+  const [logs, setLogs] = useState([]);
   const [status, setStatus] = useState(null);
   const [userForm, setUserForm] = useState(emptyUser);
+  const [profileForm, setProfileForm] = useState(emptyProfile);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profilePhotoLoading, setProfilePhotoLoading] = useState(false);
+  const [profileTelegramLinking, setProfileTelegramLinking] = useState(false);
+  const [profileTelegramMessage, setProfileTelegramMessage] = useState("");
   const [editingId, setEditingId] = useState(null);
   const [message, setMessage] = useState("");
   const [testResult, setTestResult] = useState(null);
   const [testLoading, setTestLoading] = useState(false);
-  const [whatsappStatus, setWhatsappStatus] = useState(null);
+  const [telegramStatus, setTelegramStatus] = useState(null);
+  const [config, setConfig] = useState(defaultConfig);
+  const [configSaving, setConfigSaving] = useState(false);
   const [cameraTick, setCameraTick] = useState(Date.now());
   const streamUrl = useMemo(() => `${apiUrl}/camera/frame?t=${cameraTick}`, [cameraTick]);
   const metadataRole = session.user?.user_metadata?.rol;
   const isParent = String(profile?.rol || metadataRole || "").trim().toUpperCase() === "PADRES";
+  const visibleNavItems = useMemo(() => navItems.filter((item) => !item.parentOnly || isParent), [isParent]);
 
   async function loadProfile() {
-    const { data } = await supabase
-      .from("perfiles_usuarios")
-      .select("nombres, apellidos, email, usuario, rol")
-      .eq("id", session.user.id)
-      .single();
-    setProfile(
-      data || {
+    try {
+      const data = await apiFetch("/admin/profile", session);
+      const nextProfile = {
+        ...emptyProfile,
+        ...(data || {}),
+        email: data?.email || session.user.email,
+      };
+      setProfile(nextProfile);
+      setProfileForm(nextProfile);
+    } catch {
+      const fallback = {
+        ...emptyProfile,
         nombres: session.user.email?.split("@")[0] || "Usuario",
-        apellidos: "",
         email: session.user.email,
         usuario: session.user.user_metadata?.usuario || session.user.email,
         rol: session.user.user_metadata?.rol || "HIJOs",
-      },
-    );
+      };
+      setProfile(fallback);
+      setProfileForm(fallback);
+    }
   }
 
   async function loadEvents() {
@@ -254,18 +294,41 @@ function Dashboard({ session }) {
     }
   }
 
-  async function loadWhatsappStatus() {
+  async function loadLogs() {
     if (!isParent) return;
     try {
-      setWhatsappStatus(await apiFetch("/admin/whatsapp/status", session));
+      const data = await apiFetch("/admin/logs", session);
+      setLogs(data || []);
     } catch (error) {
-      setWhatsappStatus({ enabled: false, last_error: { detail: error.message }, recipients: [] });
+      setMessage(`Logs: ${error.message}`);
+      setLogs([]);
+    }
+  }
+
+  async function loadTelegramStatus() {
+    if (!isParent) return;
+    try {
+      setTelegramStatus(await apiFetch("/admin/telegram/status", session));
+    } catch (error) {
+      setTelegramStatus({ enabled: false, last_error: { detail: error.message }, recipients: [] });
+    }
+  }
+
+  async function loadConfig() {
+    try {
+      const data = await apiFetch("/admin/config", session);
+      setConfig({ ...defaultConfig, ...(data || {}) });
+    } catch (error) {
+      setMessage(`Configuracion: ${error.message}`);
     }
   }
 
   async function refreshAll() {
-    await Promise.all([loadProfile(), loadEvents(), loadStatus()]);
-    if (isParent) loadWhatsappStatus();
+    await Promise.all([loadProfile(), loadEvents(), loadStatus(), loadConfig()]);
+    if (isParent) {
+      loadTelegramStatus();
+      loadLogs();
+    }
   }
 
   useEffect(() => {
@@ -284,7 +347,8 @@ function Dashboard({ session }) {
   useEffect(() => {
     if (isParent) {
       loadUsers();
-      loadWhatsappStatus();
+      loadTelegramStatus();
+      loadLogs();
     }
   }, [isParent]);
 
@@ -307,6 +371,7 @@ function Dashboard({ session }) {
       setUserForm(emptyUser);
       setEditingId(null);
       loadUsers();
+      loadLogs();
     } catch (error) {
       setMessage(error.message);
     }
@@ -318,6 +383,7 @@ function Dashboard({ session }) {
       await apiFetch(`/admin/users/${id}`, session, { method: "DELETE" });
       setMessage("Usuario eliminado.");
       loadUsers();
+      loadLogs();
     } catch (error) {
       setMessage(error.message);
     }
@@ -327,23 +393,123 @@ function Dashboard({ session }) {
     try {
       await apiFetch(`/admin/events/${id}/attend`, session, { method: "PATCH" });
       loadEvents();
+      loadLogs();
     } catch (error) {
       setMessage(error.message);
     }
   }
 
-  async function testWhatsapp() {
+  async function saveProfile(event) {
+    event.preventDefault();
+    setMessage("");
+    setProfileSaving(true);
+    try {
+      const payload = {
+        nombres: profileForm.nombres,
+        apellidos: profileForm.apellidos,
+        usuario: profileForm.usuario,
+        numero: profileForm.numero,
+      };
+      const saved = await apiFetch("/admin/profile", session, { method: "PUT", body: JSON.stringify(payload) });
+      const nextProfile = { ...profileForm, ...(saved || payload) };
+      setProfile(nextProfile);
+      setProfileForm(nextProfile);
+      setMessage("Perfil actualizado.");
+      loadLogs();
+    } catch (error) {
+      setMessage(`Perfil: ${error.message}`);
+    } finally {
+      setProfileSaving(false);
+    }
+  }
+
+  async function uploadProfilePhoto(file) {
+    if (!file) return;
+    setMessage("");
+    setProfilePhotoLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const saved = await apiFetch("/admin/profile/photo", session, { method: "POST", body: formData });
+      const nextProfile = { ...profileForm, ...(saved || {}) };
+      setProfile(nextProfile);
+      setProfileForm(nextProfile);
+      setMessage("Imagen de perfil actualizada.");
+      loadLogs();
+    } catch (error) {
+      setMessage(`Perfil: ${error.message}`);
+    } finally {
+      setProfilePhotoLoading(false);
+    }
+  }
+
+  async function linkProfileTelegram() {
+    if (profileTelegramLinking) return;
+    setProfileTelegramLinking(true);
+    setProfileTelegramMessage("Abriendo Telegram. Presiona Start en el bot para vincular tu perfil.");
+    try {
+      const start = await apiFetch("/admin/profile/telegram/link/start", session, { method: "POST" });
+      window.open(start.url, "_blank", "noopener,noreferrer");
+      setProfileTelegramMessage(`Presiona Start en Telegram. Si ya abriste el bot antes, envia: /start ${start.payload}`);
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        const result = await apiFetch("/admin/profile/telegram/link/sync", session, { method: "POST" });
+        if (result.linked && result.telegram_chat_id) {
+          const nextProfile = { ...profileForm, ...(result.profile || {}), telegram_chat_id: result.telegram_chat_id };
+          setProfile(nextProfile);
+          setProfileForm(nextProfile);
+          setProfileTelegramMessage(`Telegram vinculado: ${result.telegram_chat_id}`);
+          loadLogs();
+          setProfileTelegramLinking(false);
+          return;
+        }
+        setProfileTelegramMessage(`Esperando Start en Telegram... intento ${attempt + 1}/20`);
+      }
+      setProfileTelegramMessage("No se detecto el Start. Abre el bot, presiona Start y vuelve a intentar.");
+    } catch (error) {
+      setProfileTelegramMessage(`Telegram: ${error.message}`);
+    } finally {
+      setProfileTelegramLinking(false);
+    }
+  }
+
+  async function saveConfig() {
+    setMessage("");
+    setConfigSaving(true);
+    try {
+      const payload = {
+        deteccion_personas: Boolean(config.deteccion_personas),
+        deteccion_armas: Boolean(config.deteccion_armas),
+        deteccion_armas_blancas: Boolean(config.deteccion_armas_blancas),
+        deteccion_rostro_cubierto: Boolean(config.deteccion_rostro_cubierto),
+        grabacion_automatica: Boolean(config.grabacion_automatica),
+        notificaciones_push: Boolean(config.notificaciones_push),
+      };
+      const saved = await apiFetch("/admin/config", session, { method: "PUT", body: JSON.stringify(payload) });
+      setConfig({ ...defaultConfig, ...(saved || payload) });
+      setMessage("Configuracion guardada en Supabase.");
+      loadLogs();
+    } catch (error) {
+      setMessage(`Configuracion: ${error.message}`);
+    } finally {
+      setConfigSaving(false);
+    }
+  }
+
+  async function testTelegram() {
     setMessage("");
     try {
-      const result = await apiFetch("/admin/whatsapp/test", session, {
+      const result = await apiFetch("/admin/telegram/test", session, {
         method: "POST",
-        body: JSON.stringify({ mensaje: "Prueba de WhatsApp desde Seguridad V2" }),
+        body: JSON.stringify({ mensaje: "Prueba de Telegram desde Seguridad V2" }),
       });
-      setMessage(result.sent ? `WhatsApp enviado a ${result.to}.` : "WhatsApp no enviado. Revisa configuracion.");
-      loadWhatsappStatus();
+      setMessage(result.sent ? `Telegram enviado a ${result.to}.` : "Telegram no enviado. Revisa configuracion.");
+      loadTelegramStatus();
+      loadLogs();
     } catch (error) {
-      setMessage(`WhatsApp: ${error.message}`);
-      loadWhatsappStatus();
+      setMessage(`Telegram: ${error.message}`);
+      loadTelegramStatus();
     }
   }
 
@@ -374,6 +540,7 @@ function Dashboard({ session }) {
   async function testVideoFrame(blob) {
     const formData = new FormData();
     formData.append("file", blob, "video-frame.jpg");
+    formData.append("fast", "true");
     return apiFetch("/test/model/image", session, { method: "POST", body: formData });
   }
 
@@ -400,7 +567,7 @@ function Dashboard({ session }) {
             </div>
           </div>
           <nav className="flex-1 space-y-1 p-3">
-            {navItems.map((item) => (
+            {visibleNavItems.map((item) => (
               <button key={item.id} onClick={() => setActive(item.id)} className={`nav-item ${active === item.id ? "nav-active" : ""}`}>
                 <item.icon size={18} />
                 {item.label}
@@ -418,7 +585,7 @@ function Dashboard({ session }) {
         <header className="sticky top-0 z-20 border-b border-neutral-800 bg-[#070b10]/90 backdrop-blur">
           <div className="flex items-center justify-between px-5 py-4">
             <div>
-              <h2 className="text-xl font-semibold tracking-tight">{navItems.find((item) => item.id === active)?.label}</h2>
+              <h2 className="text-xl font-semibold tracking-tight">{visibleNavItems.find((item) => item.id === active)?.label || "Dashboard"}</h2>
               <p className="text-sm text-neutral-400">Operacion activa para {profile?.usuario || session.user.email}</p>
             </div>
             <div className="flex items-center gap-2">
@@ -431,7 +598,7 @@ function Dashboard({ session }) {
             </div>
           </div>
           <div className="flex gap-2 overflow-x-auto px-5 pb-3 lg:hidden">
-            {navItems.map((item) => (
+            {visibleNavItems.map((item) => (
               <button key={item.id} onClick={() => setActive(item.id)} className={`mobile-tab ${active === item.id ? "mobile-active" : ""}`}>
                 <item.icon size={16} />
                 {item.label}
@@ -443,9 +610,23 @@ function Dashboard({ session }) {
         <div className="p-5">
           {message && <div className="mb-4 rounded border border-amber-800 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">{message}</div>}
           {active === "dashboard" && <DashboardHome stats={stats} status={status} events={events} streamUrl={streamUrl} />}
+          {active === "perfil" && (
+            <ProfilePanel
+              profile={profileForm}
+              setProfile={setProfileForm}
+              saveProfile={saveProfile}
+              uploadProfilePhoto={uploadProfilePhoto}
+              linkProfileTelegram={linkProfileTelegram}
+              saving={profileSaving}
+              photoLoading={profilePhotoLoading}
+              telegramLinking={profileTelegramLinking}
+              telegramMessage={profileTelegramMessage}
+            />
+          )}
           {active === "usuarios" && (
             <UsersPanel
               isParent={isParent}
+              session={session}
               users={users}
               form={userForm}
               setForm={setUserForm}
@@ -453,12 +634,24 @@ function Dashboard({ session }) {
               setEditingId={setEditingId}
               saveUser={saveUser}
               removeUser={removeUser}
+              reloadUsers={loadUsers}
             />
           )}
           {active === "camaras" && <CamerasPanel status={status} streamUrl={streamUrl} />}
           {active === "eventos" && <EventsPanel events={events} isParent={isParent} attendEvent={attendEvent} />}
+          {active === "logs" && <LogsPanel logs={logs} isParent={isParent} />}
           {active === "test" && <TestPanel result={testResult} loading={testLoading} onTest={testModel} onFrameTest={testVideoFrame} />}
-          {active === "configuracion" && <SettingsPanel whatsappStatus={whatsappStatus} testWhatsapp={testWhatsapp} />}
+          {active === "configuracion" && (
+            <SettingsPanel
+              config={config}
+              setConfig={setConfig}
+              saveConfig={saveConfig}
+              configSaving={configSaving}
+              isParent={isParent}
+              telegramStatus={telegramStatus}
+              testTelegram={testTelegram}
+            />
+          )}
         </div>
       </section>
     </main>
@@ -470,7 +663,6 @@ function TestPanel({ result, loading, onTest, onFrameTest }) {
   const [videoUrl, setVideoUrl] = useState("");
   const [liveResult, setLiveResult] = useState(null);
   const [liveLoading, setLiveLoading] = useState(false);
-  const [liveEnabled, setLiveEnabled] = useState(true);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const analyzingRef = useRef(false);
@@ -506,21 +698,24 @@ function TestPanel({ result, loading, onTest, onFrameTest }) {
     onTest(file);
   }
 
-  async function analyzeCurrentFrame() {
+  async function analyzeCurrentFrame(force = false) {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas || !onFrameTest || analyzingRef.current || video.readyState < 2) return;
 
     analyzingRef.current = true;
-    setLiveLoading(true);
+    if (force) setLiveLoading(true);
     try {
-      const width = video.videoWidth || 1280;
-      const height = video.videoHeight || 720;
+      const sourceWidth = video.videoWidth || 1280;
+      const sourceHeight = video.videoHeight || 720;
+      const scale = Math.min(1, 960 / sourceWidth);
+      const width = Math.round(sourceWidth * scale);
+      const height = Math.round(sourceHeight * scale);
       canvas.width = width;
       canvas.height = height;
       const context = canvas.getContext("2d");
       context.drawImage(video, 0, 0, width, height);
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.82));
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.68));
       if (blob) {
         const nextResult = await onFrameTest(blob);
         setLiveResult({
@@ -533,18 +728,9 @@ function TestPanel({ result, loading, onTest, onFrameTest }) {
       // The global message handler already reports upload errors for full-file tests.
     } finally {
       analyzingRef.current = false;
-      setLiveLoading(false);
+      if (force) setLiveLoading(false);
     }
   }
-
-  useEffect(() => {
-    if (!videoUrl || !liveEnabled) return undefined;
-    const timer = setInterval(() => {
-      const video = videoRef.current;
-      if (video && !video.paused && !video.ended) analyzeCurrentFrame();
-    }, 700);
-    return () => clearInterval(timer);
-  }, [videoUrl, liveEnabled, fileName]);
 
   return (
     <div className="space-y-5">
@@ -577,15 +763,11 @@ function TestPanel({ result, loading, onTest, onFrameTest }) {
             <div className="grid gap-3">
               <StatusLine label="Modelo activo" value="best.pt" />
               <StatusLine label="Archivo seleccionado" value={fileName || "Ninguno"} />
-              <StatusLine label="Modo de salida" value={videoUrl ? "Video interactivo con deteccion en vivo" : "Deteccion visual sin almacenamiento"} />
+              <StatusLine label="Modo de salida" value={videoUrl ? "Reproduccion original; deteccion al pausar o buscar" : "Deteccion visual sin almacenamiento"} />
             </div>
             {videoUrl && (
               <div className="space-y-3 rounded border border-neutral-800 bg-neutral-950 p-3">
-                <label className="flex items-center justify-between gap-3 text-sm text-neutral-300">
-                  <span>Deteccion en tiempo real</span>
-                  <input type="checkbox" checked={liveEnabled} onChange={(event) => setLiveEnabled(event.target.checked)} />
-                </label>
-                <button className="btn-muted w-full" type="button" onClick={analyzeCurrentFrame}>
+                <button className="btn-muted w-full" type="button" onClick={() => analyzeCurrentFrame(true)}>
                   <Eye size={16} />
                   Detectar frame actual
                 </button>
@@ -608,8 +790,8 @@ function TestPanel({ result, loading, onTest, onFrameTest }) {
                   src={videoUrl}
                   controls
                   className="max-h-[460px] w-full bg-black"
-                  onLoadedData={analyzeCurrentFrame}
-                  onSeeked={analyzeCurrentFrame}
+                  onPause={() => analyzeCurrentFrame(true)}
+                  onSeeked={() => analyzeCurrentFrame(true)}
                 />
                 <canvas ref={canvasRef} className="hidden" />
               </div>
@@ -706,9 +888,98 @@ function DashboardHome({ stats, status, events, streamUrl }) {
   );
 }
 
-function UsersPanel({ isParent, users, form, setForm, editingId, setEditingId, saveUser, removeUser }) {
+function ProfilePanel({
+  profile,
+  setProfile,
+  saveProfile,
+  uploadProfilePhoto,
+  linkProfileTelegram,
+  saving,
+  photoLoading,
+  telegramLinking,
+  telegramMessage,
+}) {
+  const fullName = `${profile.nombres || ""} ${profile.apellidos || ""}`.trim() || profile.usuario || "Usuario";
+
+  return (
+    <div className="space-y-5">
+      <section className="grid gap-4 md:grid-cols-3">
+        <Stat icon={UserCircle} label="Perfil" value={profile.rol || "-"} tone="emerald" />
+        <Stat icon={MessageCircle} label="Telegram" value={profile.telegram_chat_id ? "Vinculado" : "Pendiente"} tone="sky" />
+        <Stat icon={Activity} label="Estado" value={profile.activo === false ? "Inactivo" : "Activo"} tone="amber" />
+      </section>
+
+      <div className="grid gap-5 xl:grid-cols-[360px_1fr]">
+        <section className="panel">
+          <PanelHeader icon={UserCircle} title="Imagen de perfil" aside="Supabase Storage" />
+          <div className="flex flex-col items-center text-center">
+            <div className="grid h-44 w-44 place-items-center overflow-hidden rounded border border-neutral-800 bg-neutral-950">
+              {profile.foto_perfil_url ? (
+                <img src={profile.foto_perfil_url} alt={fullName} className="h-full w-full object-cover" />
+              ) : (
+                <UserCircle size={88} className="text-neutral-600" />
+              )}
+            </div>
+            <h3 className="mt-4 text-lg font-semibold">{fullName}</h3>
+            <p className="text-sm text-neutral-400">{profile.email}</p>
+            <label className="btn-muted mt-5 cursor-pointer">
+              <ImageUp size={16} />
+              {photoLoading ? "Subiendo..." : "Cambiar imagen"}
+              <input
+                className="hidden"
+                type="file"
+                accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                disabled={photoLoading}
+                onChange={(event) => uploadProfilePhoto(event.target.files?.[0])}
+              />
+            </label>
+            <p className="mt-3 text-xs leading-5 text-neutral-500">La imagen se guarda en Storage dentro de imagen_perfil y la URL publica queda en foto_perfil_url.</p>
+          </div>
+        </section>
+
+        <section className="panel">
+          <PanelHeader icon={Save} title="Datos personales" aside="Solo tu cuenta" />
+          <form onSubmit={saveProfile} className="space-y-5">
+            <div className="grid gap-4 md:grid-cols-2">
+              <Input label="Nombres" value={profile.nombres || ""} onChange={(value) => setProfile({ ...profile, nombres: value })} />
+              <Input label="Apellidos" value={profile.apellidos || ""} onChange={(value) => setProfile({ ...profile, apellidos: value })} />
+              <Input label="Usuario" value={profile.usuario || ""} onChange={(value) => setProfile({ ...profile, usuario: value })} />
+              <Input label="Telefono" value={profile.numero || ""} onChange={(value) => setProfile({ ...profile, numero: value })} />
+              <Input label="Correo electronico" value={profile.email || ""} onChange={() => {}} disabled />
+              <Input label="Rol" value={profile.rol || ""} onChange={() => {}} disabled />
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded border border-neutral-800 bg-neutral-950 p-3">
+                <p className="text-xs text-neutral-500">Telegram Chat ID</p>
+                <p className="mt-1 break-words text-sm text-neutral-200">{profile.telegram_chat_id || "Sin vincular"}</p>
+                <button className="btn-muted mt-3 w-full" type="button" onClick={linkProfileTelegram} disabled={telegramLinking}>
+                  <MessageCircle size={16} />
+                  {telegramLinking ? "Esperando Telegram..." : profile.telegram_chat_id ? "Volver a vincular" : "Vincular Telegram"}
+                </button>
+                {telegramMessage && <p className="mt-2 text-xs leading-5 text-neutral-400">{telegramMessage}</p>}
+              </div>
+              <StatusLine label="URL foto_perfil_url" value={profile.foto_perfil_url || "Sin imagen"} />
+            </div>
+
+            <div className="flex justify-end">
+              <button className="btn-primary" disabled={saving}>
+                <Save size={16} />
+                {saving ? "Guardando..." : "Guardar perfil"}
+              </button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function UsersPanel({ isParent, session, users, form, setForm, editingId, setEditingId, saveUser, removeUser, reloadUsers }) {
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState("TODOS");
+  const [telegramLinking, setTelegramLinking] = useState(false);
+  const [telegramLinkMessage, setTelegramLinkMessage] = useState("");
 
   if (!isParent) {
     return <EmptyState title="Acceso restringido" detail="Solo los usuarios con rol PADREs pueden administrar usuarios." />;
@@ -724,6 +995,7 @@ function UsersPanel({ isParent, users, form, setForm, editingId, setEditingId, s
       password: "",
       rol: user.rol || "HIJOs",
       numero: user.numero || "",
+      telegram_chat_id: user.telegram_chat_id || "",
       activo: Boolean(user.activo),
     });
   }
@@ -744,6 +1016,35 @@ function UsersPanel({ isParent, users, form, setForm, editingId, setEditingId, s
     children: users.filter((user) => user.rol === "HIJOs").length,
     active: users.filter((user) => user.activo).length,
   };
+
+  async function linkTelegram() {
+    if (!editingId || telegramLinking) return;
+    setTelegramLinking(true);
+    setTelegramLinkMessage("Abriendo Telegram. Presiona Start en el bot para vincular este usuario.");
+    try {
+      const start = await apiFetch(`/admin/telegram/link/${editingId}/start`, session, { method: "POST" });
+      window.open(start.url, "_blank", "noopener,noreferrer");
+      setTelegramLinkMessage(`Presiona Start en Telegram. Si ya abriste el bot antes, envia: /start ${start.payload}`);
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        const result = await apiFetch(`/admin/telegram/link/${editingId}/sync`, session, { method: "POST" });
+        if (result.linked && result.telegram_chat_id) {
+          setForm((current) => ({ ...current, telegram_chat_id: result.telegram_chat_id }));
+          setTelegramLinkMessage(`Telegram vinculado: ${result.telegram_chat_id}`);
+          reloadUsers();
+          setTelegramLinking(false);
+          return;
+        }
+        setTelegramLinkMessage(`Esperando Start en Telegram... intento ${attempt + 1}/20`);
+      }
+      setTelegramLinkMessage("No se detecto el Start. Abre el bot y presiona Start, luego intenta de nuevo.");
+    } catch (error) {
+      setTelegramLinkMessage(`Telegram: ${error.message}`);
+    } finally {
+      setTelegramLinking(false);
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -768,6 +1069,16 @@ function UsersPanel({ isParent, users, form, setForm, editingId, setEditingId, s
               <Input label="Usuario" value={form.usuario} onChange={(value) => setForm({ ...form, usuario: value })} />
               {!editingId && <Input label="Contrasena" type="password" value={form.password} onChange={(value) => setForm({ ...form, password: value })} />}
               <Input label="Telefono" value={form.numero} onChange={(value) => setForm({ ...form, numero: value })} />
+              <div>
+                <Input label="Telegram Chat ID" value={form.telegram_chat_id} onChange={(value) => setForm({ ...form, telegram_chat_id: value })} />
+                {editingId && (
+                  <button className="btn-muted mt-2 w-full" type="button" onClick={linkTelegram} disabled={telegramLinking}>
+                    <MessageCircle size={16} />
+                    {telegramLinking ? "Esperando Telegram..." : "Vincular Telegram"}
+                  </button>
+                )}
+                {telegramLinkMessage && <p className="mt-2 text-xs leading-5 text-neutral-400">{telegramLinkMessage}</p>}
+              </div>
             </div>
 
             <div className="rounded border border-neutral-800 bg-neutral-950 p-3">
@@ -856,6 +1167,7 @@ function UsersPanel({ isParent, users, form, setForm, editingId, setEditingId, s
                     <td className="px-5 py-4">
                       <p className="text-neutral-300">{user.email}</p>
                       <p className="text-xs text-neutral-500">{user.numero || "Sin telefono"}</p>
+                      <p className="text-xs text-neutral-500">{user.telegram_chat_id ? `Telegram: ${user.telegram_chat_id}` : "Sin Telegram"}</p>
                     </td>
                     <td className="px-5 py-4"><Badge tone={user.rol === "PADREs" ? "emerald" : "sky"}>{user.rol}</Badge></td>
                     <td className="px-5 py-4"><Badge tone={user.activo ? "emerald" : "red"}>{user.activo ? "Activo" : "Inactivo"}</Badge></td>
@@ -1015,19 +1327,107 @@ function EventsPanel({ events, isParent, attendEvent }) {
   );
 }
 
-function SettingsPanel({ whatsappStatus, testWhatsapp }) {
+function LogsPanel({ logs, isParent }) {
+  const [query, setQuery] = useState("");
+  const [resultFilter, setResultFilter] = useState("TODOS");
+
+  if (!isParent) {
+    return <EmptyState title="Acceso restringido" detail="Solo los usuarios con rol PADREs pueden ver los logs del sistema." />;
+  }
+
+  const results = Array.from(new Set(logs.map((item) => item.resultado).filter(Boolean)));
+  const filteredLogs = logs.filter((item) => {
+    const haystack = `${item.accion || ""} ${item.descripcion || ""} ${item.ip_address || ""} ${item.user_agent || ""} ${item.usuario?.usuario || ""}`.toLowerCase();
+    const matchesQuery = haystack.includes(query.toLowerCase());
+    const matchesResult = resultFilter === "TODOS" || item.resultado === resultFilter;
+    return matchesQuery && matchesResult;
+  });
+
+  return (
+    <div className="space-y-5">
+      <section className="grid gap-4 md:grid-cols-3">
+        <Stat icon={FileText} label="Registros" value={String(logs.length)} tone="sky" />
+        <Stat icon={UserCheck} label="Usuarios auditados" value={String(new Set(logs.map((item) => item.usuario_id).filter(Boolean)).size)} tone="emerald" />
+        <Stat icon={Activity} label="Resultados" value={String(results.length || 0)} tone="amber" />
+      </section>
+
+      <section className="panel">
+        <PanelHeader icon={FileText} title="Logs del sistema" aside={`${filteredLogs.length}/${logs.length} visibles`} />
+        <div className="mb-4 grid gap-3 md:grid-cols-[1fr_220px]">
+          <label className="relative block">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-500" size={17} />
+            <input className="field pl-10" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar accion, usuario, IP o descripcion" />
+          </label>
+          <select className="field" value={resultFilter} onChange={(event) => setResultFilter(event.target.value)}>
+            <option value="TODOS">Todos los resultados</option>
+            {results.map((result) => (
+              <option key={result} value={result}>{result}</option>
+            ))}
+          </select>
+        </div>
+
+        {filteredLogs.length === 0 ? (
+          <EmptyState title="Sin logs" detail="No hay registros para los filtros seleccionados." />
+        ) : (
+          <div className="overflow-x-auto rounded border border-neutral-800">
+            <table className="w-full min-w-[980px] text-left text-sm">
+              <thead className="bg-neutral-950 text-xs uppercase text-neutral-500">
+                <tr>
+                  <th className="px-4 py-3">Accion</th>
+                  <th className="px-4 py-3">Usuario</th>
+                  <th className="px-4 py-3">Descripcion</th>
+                  <th className="px-4 py-3">Resultado</th>
+                  <th className="px-4 py-3">IP</th>
+                  <th className="px-4 py-3">Fecha</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-neutral-800">
+                {filteredLogs.map((item) => {
+                  const profile = item.usuario;
+                  const actor = profile ? `${profile.nombres || ""} ${profile.apellidos || ""}`.trim() || profile.usuario : "Sistema";
+                  return (
+                    <tr key={item.id} className="bg-neutral-900/70 align-top">
+                      <td className="px-4 py-3">
+                        <p className="font-medium text-neutral-100">{item.accion}</p>
+                        <p className="mt-1 text-xs text-neutral-500">ID {item.id}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="text-neutral-200">{actor}</p>
+                        <p className="mt-1 text-xs text-neutral-500">{profile?.rol || item.usuario_id || "-"}</p>
+                      </td>
+                      <td className="max-w-md px-4 py-3 text-neutral-400">
+                        <p>{item.descripcion || "-"}</p>
+                        <p className="mt-1 line-clamp-2 text-xs text-neutral-600">{item.user_agent || "Sin user agent"}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge tone={item.resultado === "OK" ? "emerald" : "sky"}>{item.resultado || "-"}</Badge>
+                      </td>
+                      <td className="px-4 py-3 text-neutral-400">{item.ip_address || "-"}</td>
+                      <td className="px-4 py-3 text-neutral-400">{item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function SettingsPanel({ config, setConfig, saveConfig, configSaving, isParent, telegramStatus, testTelegram }) {
   const detectionOptions = [
-    ["Deteccion de personas", "Activa el reconocimiento de presencia humana."],
-    ["Arma de fuego", "Detecta armas de fuego entrenadas como arma_de_fuego."],
-    ["Arma blanca", "Detecta cuchillos u objetos cortopunzantes como arma_blanca."],
-    ["Rostro cubierto", "Detecta pasamontana, mascarilla y casco."],
+    ["deteccion_personas", "Deteccion de personas", "Activa el reconocimiento de presencia humana."],
+    ["deteccion_armas", "Arma de fuego", "Detecta armas de fuego entrenadas como arma_de_fuego."],
+    ["deteccion_armas_blancas", "Arma blanca", "Detecta cuchillos u objetos cortopunzantes como arma_blanca."],
+    ["deteccion_rostro_cubierto", "Rostro cubierto", "Detecta pasamontana, mascarilla y casco."],
   ];
   const systemOptions = [
-    ["Grabacion automatica", "Desactivado mientras el sistema esta en modo solo deteccion.", false],
-    ["Notificaciones push", "Preparado para activar alertas en tiempo real.", true],
-    ["Guardar evidencias", "Guarda imagen y video en Supabase Storage cuando hay alerta amarilla o roja.", true],
-    ["Modo laboratorio", "Permite pruebas de imagen/video sin afectar Supabase.", true],
+    ["grabacion_automatica", "Grabacion automatica", "Permite capturar evidencia cuando una alerta amarilla o roja lo requiera."],
+    ["notificaciones_push", "Activa el envio de avisos por Telegram a los usuarios vinculados."],
   ];
+  const updateOption = (key, value) => setConfig((current) => ({ ...current, [key]: value }));
 
   return (
     <div className="space-y-5">
@@ -1035,31 +1435,50 @@ function SettingsPanel({ whatsappStatus, testWhatsapp }) {
         <Stat icon={Settings} label="Modo" value="Deteccion" tone="emerald" />
         <Stat icon={Shield} label="Storage" value="Supabase" tone="emerald" />
         <Stat icon={FlaskConical} label="Modelo" value="best.pt" tone="sky" />
-        <Stat icon={Activity} label="Frame skip" value="3" tone="amber" />
+        <Stat icon={Activity} label="Config" value="Supabase" tone="amber" />
       </section>
 
       <div className="grid gap-5 xl:grid-cols-[1fr_420px]">
         <section className="panel overflow-hidden p-0">
           <div className="border-b border-neutral-800 bg-neutral-950/70 p-5">
-            <PanelHeader icon={Settings} title="Reglas de deteccion" aside="YOLO runtime" />
-            <p className="text-sm text-neutral-400">Preferencias visuales para el comportamiento actual del sistema.</p>
+            <PanelHeader icon={Settings} title="Reglas de deteccion" aside="Supabase" />
+            <p className="text-sm text-neutral-400">Estos valores se guardan en la tabla configuraciones para el usuario actual.</p>
           </div>
           <div className="grid gap-3 p-5 md:grid-cols-2">
-            {detectionOptions.map(([title, detail]) => (
-              <SettingToggle key={title} title={title} detail={detail} defaultChecked />
+            {detectionOptions.map(([key, title, detail]) => (
+              <SettingToggle
+                key={key}
+                title={title}
+                detail={detail}
+                checked={Boolean(config?.[key])}
+                disabled={!isParent}
+                onChange={(value) => updateOption(key, value)}
+              />
             ))}
           </div>
         </section>
 
         <section className="panel overflow-hidden p-0">
           <div className="border-b border-neutral-800 bg-neutral-950/70 p-5">
-            <PanelHeader icon={Shield} title="Operacion" aside="Local" />
+            <PanelHeader icon={Shield} title="Operacion" aside="Supabase" />
             <p className="text-sm text-neutral-400">Estado de almacenamiento y acciones automaticas.</p>
           </div>
           <div className="space-y-3 p-5">
-            {systemOptions.map(([title, detail, enabled]) => (
-              <SettingToggle key={title} title={title} detail={detail} defaultChecked={enabled} />
+            {systemOptions.map(([key, title, detail]) => (
+              <SettingToggle
+                key={key}
+                title={title}
+                detail={detail}
+                checked={Boolean(config?.[key])}
+                disabled={!isParent}
+                onChange={(value) => updateOption(key, value)}
+              />
             ))}
+            <button className="btn-primary w-full justify-center" onClick={saveConfig} disabled={!isParent || configSaving}>
+              <Save size={16} />
+              {configSaving ? "Guardando..." : "Guardar configuracion"}
+            </button>
+            {!isParent && <p className="text-xs text-neutral-500">Solo las cuentas PADREs pueden modificar esta configuracion.</p>}
           </div>
         </section>
       </div>
@@ -1069,40 +1488,39 @@ function SettingsPanel({ whatsappStatus, testWhatsapp }) {
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <StatusLine label="Backend" value="http://127.0.0.1:8001" />
           <StatusLine label="Camara" value="Laptop local / indice 0" />
-          <StatusLine label="Evidencias" value="Activas para alertas" />
+          <StatusLine label="Evidencias" value={config?.grabacion_automatica ? "Activas para alertas" : "Desactivadas"} />
+          <StatusLine label="Avisos Telegram" value={config?.notificaciones_push ? "Activos" : "Desactivados"} />
           <StatusLine label="Supabase Storage" value="evidencias/alerta_roja y evidencias/alerta_amarilla" />
         </div>
       </section>
 
       <section className="panel">
-        <PanelHeader icon={MessageCircle} title="WhatsApp Cloud API" aside={whatsappStatus?.enabled ? "Habilitado" : "Pendiente"} />
+        <PanelHeader icon={MessageCircle} title="Telegram Bot" aside={telegramStatus?.enabled ? "Habilitado" : "Pendiente"} />
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <StatusLine label="Token" value={whatsappStatus?.has_token ? "Configurado" : "Falta token"} />
-          <StatusLine label="Phone Number ID" value={whatsappStatus?.phone_number_id_valid ? whatsappStatus.phone_number_id : "Invalido"} />
-          <StatusLine label="Version Graph" value={whatsappStatus?.graph_version || "-"} />
-          <StatusLine label="Destinatarios" value={String(whatsappStatus?.recipients?.length || 0)} />
-          <StatusLine label="Plantilla" value={whatsappStatus?.send_template_first ? `${whatsappStatus?.template_name || "-"} (${whatsappStatus?.template_language || "-"})` : "No usa plantilla"} />
-          <StatusLine label="Variables plantilla" value={whatsappStatus?.template_body_params ? "Envia alerta en {{1}}" : "Sin variables"} />
+          <StatusLine label="Bot token" value={telegramStatus?.has_token ? "Configurado" : "Falta token"} />
+          <StatusLine label="Parse mode" value={telegramStatus?.parse_mode || "HTML"} />
+          <StatusLine label="Destinatarios" value={String(telegramStatus?.recipients?.length || 0)} />
+          <StatusLine label="Estado" value={telegramStatus?.enabled ? "Activo" : "Inactivo"} />
         </div>
         <div className="mt-4 rounded border border-neutral-800 bg-neutral-950 p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-sm font-medium text-neutral-100">Prueba de envio</p>
-              <p className="mt-1 text-xs text-neutral-500">Envia un mensaje al primer usuario activo con numero registrado.</p>
+              <p className="mt-1 text-xs text-neutral-500">Envia un mensaje al primer usuario activo con Telegram Chat ID registrado.</p>
             </div>
-            <button className="btn-muted" onClick={testWhatsapp}>
+            <button className="btn-muted" onClick={testTelegram}>
               <RefreshCw size={16} />
-              Probar WhatsApp
+              Probar Telegram
             </button>
           </div>
-          {whatsappStatus?.last_error && (
+          {telegramStatus?.last_error && (
             <pre className="mt-4 max-h-40 overflow-auto rounded border border-red-900 bg-red-950/30 p-3 text-xs text-red-100">
-              {JSON.stringify(whatsappStatus.last_error, null, 2)}
+              {JSON.stringify(telegramStatus.last_error, null, 2)}
             </pre>
           )}
           <div className="mt-4 grid gap-2 md:grid-cols-2">
-            {(whatsappStatus?.recipients || []).map((item) => (
-              <StatusLine key={item.id} label={`${item.nombres || ""} ${item.apellidos || ""}`.trim() || "Usuario"} value={item.whatsapp || "Sin numero"} />
+            {(telegramStatus?.recipients || []).map((item) => (
+              <StatusLine key={item.id} label={`${item.nombres || ""} ${item.apellidos || ""}`.trim() || "Usuario"} value={item.telegram_chat_id || "Sin chat id"} />
             ))}
           </div>
         </div>
@@ -1111,14 +1529,14 @@ function SettingsPanel({ whatsappStatus, testWhatsapp }) {
   );
 }
 
-function SettingToggle({ title, detail, defaultChecked = true }) {
+function SettingToggle({ title, detail, checked = true, onChange = () => {}, disabled = false }) {
   return (
-    <label className="flex items-start justify-between gap-4 rounded border border-neutral-800 bg-neutral-950 p-4">
+    <label className={`flex items-start justify-between gap-4 rounded border border-neutral-800 bg-neutral-950 p-4 ${disabled ? "opacity-70" : ""}`}>
       <span>
         <span className="block text-sm font-medium text-neutral-100">{title}</span>
         <span className="mt-1 block text-xs leading-5 text-neutral-500">{detail}</span>
       </span>
-      <input className="mt-1" type="checkbox" defaultChecked={defaultChecked} />
+      <input className="mt-1" type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
     </label>
   );
 }

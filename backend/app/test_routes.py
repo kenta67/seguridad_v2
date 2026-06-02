@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 import imageio_ffmpeg
 import numpy as np
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from PIL import Image, ImageOps
 from ultralytics import YOLO
 
@@ -78,12 +78,32 @@ def _iou(box_a, box_b):
     return inter_area / union if union else 0
 
 
+def _intersection_over_min_area(box_a, box_b):
+    ax1, ay1, ax2, ay2 = box_a
+    bx1, by1, bx2, by2 = box_b
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    inter_w = max(0, inter_x2 - inter_x1)
+    inter_h = max(0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+    area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+    area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+    min_area = min(area_a, area_b)
+    return inter_area / min_area if min_area else 0
+
+
+def _same_object(box_a, box_b):
+    return _iou(box_a, box_b) > 0.35 or _intersection_over_min_area(box_a, box_b) > 0.60
+
+
 def _dedupe_detections(detections):
     ordered = sorted(detections, key=lambda item: item["confidence"], reverse=True)
     kept = []
     for detection in ordered:
         duplicate = any(
-            detection["label"] == item["label"] and _iou(detection["box"], item["box"]) > 0.65
+            detection["label"] == item["label"] and _same_object(detection["box"], item["box"])
             for item in kept
         )
         if not duplicate:
@@ -131,7 +151,25 @@ def _results_to_detections(results):
     return detections
 
 
-def _predict_test(frame):
+def _predict_fast(frame):
+    model = _get_model()
+    results = model.predict(
+        frame,
+        conf=max(settings.test_detection_confidence, 0.08),
+        iou=0.55,
+        imgsz=min(settings.test_detection_imgsz, 960),
+        max_det=settings.detection_max_det,
+        agnostic_nms=False,
+        augment=False,
+        verbose=False,
+    )
+    return _dedupe_detections(_results_to_detections(results))
+
+
+def _predict_test(frame, fast: bool = False):
+    if fast:
+        return _predict_fast(frame)
+
     model = _get_model()
     class_ids = list(model.names.keys())
     detections = []
@@ -139,11 +177,11 @@ def _predict_test(frame):
     general_results = model.predict(
         frame,
         conf=settings.test_detection_confidence,
-        iou=0.95,
+        iou=0.80,
         imgsz=settings.test_detection_imgsz,
         max_det=settings.detection_max_det,
         agnostic_nms=False,
-        augment=True,
+        augment=False,
         verbose=False,
     )
     detections.extend(_results_to_detections(general_results))
@@ -152,11 +190,11 @@ def _predict_test(frame):
         results = model.predict(
             frame,
             conf=settings.test_detection_confidence,
-            iou=0.95,
+            iou=0.80,
             imgsz=settings.test_detection_imgsz,
             max_det=settings.detection_max_det,
             agnostic_nms=False,
-            augment=True,
+            augment=False,
             classes=[class_id],
             verbose=False,
         )
@@ -211,7 +249,7 @@ def _convert_video_to_mp4(source_path: Path) -> Path | None:
 
 
 @router.post("/model/image")
-async def test_image(file: UploadFile = File(...)):
+async def test_image(file: UploadFile = File(...), fast: bool = Form(False)):
     data = await file.read()
     suffix = Path(file.filename or "").suffix.lower()
     if suffix and suffix not in IMAGE_SUFFIXES:
@@ -221,7 +259,7 @@ async def test_image(file: UploadFile = File(...)):
     if image is None:
         raise HTTPException(status_code=422, detail="No se pudo leer la imagen. Usa JPG, PNG, WEBP, BMP o TIFF.")
 
-    detections = _predict_test(image)
+    detections = _predict_test(image, fast=fast)
     annotated = _draw_detections(image, detections)
     ok, encoded = cv2.imencode(".jpg", annotated)
     if not ok:

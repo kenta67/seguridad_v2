@@ -10,6 +10,7 @@ create table if not exists perfiles_usuarios (
     usuario varchar(50) unique not null,
     contrasena text not null,
     numero varchar(15),
+    telegram_chat_id varchar(80),
     foto_perfil_url text,
     rol varchar(20) not null
         check (rol in ('PADREs', 'HIJOs', 'OTROS')),
@@ -64,6 +65,12 @@ create table if not exists configuraciones (
     created_at timestamp default now()
 );
 
+create unique index if not exists configuraciones_usuarios_id_key
+on configuraciones(usuarios_id);
+
+create index if not exists logs_sistema_created_at_idx
+on logs_sistema(created_at desc);
+
 alter table perfiles_usuarios enable row level security;
 alter table eventos_sospechosos enable row level security;
 alter table alertas enable row level security;
@@ -75,6 +82,12 @@ on perfiles_usuarios for select
 to authenticated
 using (auth.uid() = id);
 
+create policy "usuarios actualizan su perfil"
+on perfiles_usuarios for update
+to authenticated
+using (auth.uid() = id)
+with check (auth.uid() = id);
+
 create policy "usuarios leen eventos"
 on eventos_sospechosos for select
 to authenticated
@@ -85,7 +98,33 @@ on alertas for select
 to authenticated
 using (auth.uid() = usuario_id);
 
+create policy "padres leen logs del sistema"
+on logs_sistema for select
+to authenticated
+using (
+    exists (
+        select 1
+        from perfiles_usuarios
+        where perfiles_usuarios.id = auth.uid()
+          and perfiles_usuarios.rol = 'PADREs'
+    )
+);
+
 create policy "usuarios leen configuraciones propias"
 on configuraciones for select
 to authenticated
 using (auth.uid() = usuarios_id);
+
+create policy "usuarios crean configuraciones propias"
+on configuraciones for insert
+to authenticated
+with check (auth.uid() = usuarios_id);
+
+create policy "usuarios actualizan configuraciones propias"
+on configuraciones for update
+to authenticated
+using (auth.uid() = usuarios_id)
+with check (auth.uid() = usuarios_id);
+
+alter table perfiles_usuarios
+add column if not exists telegram_chat_id varchar(80);

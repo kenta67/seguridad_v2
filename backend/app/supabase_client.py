@@ -6,6 +6,16 @@ from supabase import Client, create_client
 from app.config import settings
 
 
+DEFAULT_CONFIG = {
+    "deteccion_personas": True,
+    "deteccion_armas": True,
+    "deteccion_armas_blancas": True,
+    "deteccion_rostro_cubierto": True,
+    "grabacion_automatica": True,
+    "notificaciones_push": True,
+}
+
+
 def get_supabase() -> Client | None:
     if not settings.supabase_url or not settings.supabase_service_role_key:
         return None
@@ -109,11 +119,28 @@ def get_family_recipients() -> list[dict]:
 
     result = (
         client.table("perfiles_usuarios")
-        .select("id,nombres,apellidos,numero,rol,activo")
+        .select("id,nombres,apellidos,numero,telegram_chat_id,rol,activo")
         .eq("activo", True)
         .execute()
     )
-    return [item for item in (result.data or []) if item.get("numero")]
+    return [item for item in (result.data or []) if item.get("telegram_chat_id")]
+
+
+def get_system_config() -> dict:
+    client = get_supabase()
+    if client is None:
+        return dict(DEFAULT_CONFIG)
+
+    result = (
+        client.table("configuraciones")
+        .select("*")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        return dict(DEFAULT_CONFIG)
+    return {**DEFAULT_CONFIG, **result.data[0]}
 
 
 def is_event_attended(event_id: str) -> bool:
