@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from app.config import settings
 from app.admin_routes import router as admin_router
@@ -20,6 +20,7 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -52,3 +53,11 @@ def camera_stream():
         detector.stream(),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
+
+
+@app.get("/camera/frame")
+def camera_frame():
+    frame = detector.frame_jpeg()
+    if frame is None:
+        return Response(status_code=503)
+    return Response(content=frame, media_type="image/jpeg")

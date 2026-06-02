@@ -1,16 +1,19 @@
 import threading
 import time
+import os
 from collections import deque
-from datetime import datetime
-from pathlib import Path
-from uuid import uuid4
-
 import cv2
 import numpy as np
+
+from app.config import settings
+
+settings.alert_temp_dir.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("YOLO_CONFIG_DIR", str(settings.alert_temp_dir / "ultralytics"))
+
 from ultralytics import YOLO
 
-from app.config import BASE_DIR, settings
-from app.supabase_client import insert_event, upload_file
+from app.alert_service import AlertService, classify_alert
+from app.labels import display_label, label_color, normalize_label
 
 
 class CameraDetector:
@@ -20,11 +23,13 @@ class CameraDetector:
         self.lock = threading.Lock()
         self.last_frame = None
         self.last_detections = []
+        self.last_boxes = []
         self.last_alert_at = 0.0
+        self.frame_index = 0
         self.running = False
-        self.buffer = deque(maxlen=max(90, settings.video_seconds * 30))
-        self.evidence_dir = BASE_DIR / "evidence"
-        self.evidence_dir.mkdir(exist_ok=True)
+        self.frame_buffer = deque(maxlen=max(30, settings.video_seconds * 15))
+        self.detection_history = deque(maxlen=12)
+        self.alert_service = AlertService()
 
     def start(self):
         if self.running:
@@ -55,32 +60,38 @@ class CameraDetector:
                 continue
 
             detections = []
-            annotated = frame.copy()
+            boxes = self.last_boxes
 
-            if self.model is not None:
+            should_detect = self.model is not None and self.frame_index % max(1, settings.detection_frame_skip) == 0
+            if should_detect:
                 results = self.model.predict(
                     frame,
                     conf=settings.detection_confidence,
+                    iou=settings.detection_iou,
+                    max_det=settings.detection_max_det,
+                    agnostic_nms=False,
                     verbose=False,
                 )
-                annotated, detections = self._parse_results(frame, results)
+                detections, boxes = self._parse_results(results)
+                self.last_boxes = boxes
+                self.detection_history.append(detections)
+            else:
+                detections = self.last_detections
 
-            self.buffer.append(frame.copy())
+            annotated = self._draw_boxes(frame, boxes)
+            self.frame_buffer.append(annotated.copy())
+            alert_detections = self._recent_detections()
 
             with self.lock:
                 self.last_frame = annotated
                 self.last_detections = detections
 
-            suspicious = [item for item in detections if item["label"].lower() in settings.suspicious_labels]
-            if suspicious and self._can_send_alert():
-                self.last_alert_at = time.time()
-                threading.Thread(
-                    target=self._save_evidence,
-                    args=(annotated.copy(), list(self.buffer), suspicious[0]),
-                    daemon=True,
-                ).start()
+            alert = classify_alert(alert_detections)
+            if alert:
+                self.alert_service.handle(alert, annotated, list(self.frame_buffer), alert_detections)
 
-            time.sleep(0.03)
+            self.frame_index += 1
+            time.sleep(0.01)
 
     def _open_camera(self):
         if self.capture is not None and self.capture.isOpened():
@@ -98,9 +109,9 @@ class CameraDetector:
         with self.lock:
             self.last_frame = frame
 
-    def _parse_results(self, frame, results):
-        annotated = frame.copy()
+    def _parse_results(self, results):
         detections = []
+        boxes = []
 
         for result in results:
             names = result.names
@@ -110,94 +121,88 @@ class CameraDetector:
                 label = names.get(class_id, str(class_id))
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 detections.append({"label": label, "confidence": confidence})
-
-                color = (0, 0, 255) if label.lower() in settings.suspicious_labels else (0, 180, 0)
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(
-                    annotated,
-                    f"{label} {confidence:.2f}",
-                    (x1, max(25, y1 - 8)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    color,
-                    2,
-                    cv2.LINE_AA,
+                boxes.append(
+                    {
+                        "label": label,
+                        "confidence": confidence,
+                        "xyxy": (x1, y1, x2, y2),
+                    }
                 )
 
-        return annotated, detections
+        return detections, boxes
 
-    def _can_send_alert(self):
-        return time.time() - self.last_alert_at >= settings.alert_cooldown_seconds
+    def _recent_detections(self):
+        best_by_label = {}
+        for detections in self.detection_history:
+            for item in detections:
+                label = normalize_label(item["label"])
+                current = best_by_label.get(label)
+                if current is None or item["confidence"] > current["confidence"]:
+                    best_by_label[label] = {
+                        "label": label,
+                        "confidence": item["confidence"],
+                    }
+        return list(best_by_label.values())
 
-    def _save_evidence(self, frame, frames, detection):
-        event_id = uuid4()
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_name = f"{timestamp}_{event_id}"
-        image_path = self.evidence_dir / f"{base_name}.jpg"
-        video_path = self.evidence_dir / f"{base_name}.mp4"
-
-        cv2.imwrite(str(image_path), frame)
-        self._write_video(video_path, frames)
-
-        storage_image = f"eventos/{base_name}.jpg"
-        storage_video = f"eventos/{base_name}.mp4"
-
-        uploaded_image = upload_file(image_path, storage_image, "image/jpeg")
-        uploaded_video = upload_file(video_path, storage_video, "video/mp4")
-
-        label = detection["label"]
-        confidence = detection["confidence"]
-        risk = "ALTO" if label.lower() != "person" else "MEDIO"
-
-        insert_event(
-            tipo_evento=label,
-            descripcion=f"Deteccion sospechosa: {label}",
-            confianza=confidence,
-            nivel_riesgo=risk,
-            imagen_path=uploaded_image,
-            video_path=uploaded_video,
-        )
-
-    def _write_video(self, video_path: Path, frames):
-        if not frames:
-            return
-
-        height, width = frames[0].shape[:2]
-        writer = cv2.VideoWriter(
-            str(video_path),
-            cv2.VideoWriter_fourcc(*"mp4v"),
-            12,
-            (width, height),
-        )
-        for frame in frames:
-            writer.write(frame)
-        writer.release()
+    def _draw_boxes(self, frame, boxes):
+        annotated = frame.copy()
+        for item in boxes:
+            label = item["label"]
+            confidence = item["confidence"]
+            x1, y1, x2, y2 = item["xyxy"]
+            color = label_color(label)
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(
+                annotated,
+                f"{display_label(label)} {confidence:.2f}",
+                (x1, max(25, y1 - 8)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                color,
+                2,
+                cv2.LINE_AA,
+            )
+        return annotated
 
     def stream(self):
         self.start()
         while True:
-            with self.lock:
-                frame = None if self.last_frame is None else self.last_frame.copy()
-
-            if frame is None:
+            jpeg = self.frame_jpeg()
+            if jpeg is None:
                 time.sleep(0.1)
-                continue
-
-            ok, encoded = cv2.imencode(".jpg", frame)
-            if not ok:
                 continue
 
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n\r\n"
-                + encoded.tobytes()
+                + jpeg
                 + b"\r\n"
             )
 
+    def frame_jpeg(self):
+        self.start()
+        with self.lock:
+            frame = None if self.last_frame is None else self.last_frame.copy()
+
+        if frame is None:
+            self._set_status_frame("Iniciando camara", "Esperando primer frame...")
+            with self.lock:
+                frame = self.last_frame.copy()
+
+        ok, encoded = cv2.imencode(".jpg", frame)
+        if not ok:
+            return None
+        return encoded.tobytes()
+
     def status(self):
+        recent_detections = self._recent_detections()
         return {
             "camera_open": self.capture is not None and self.capture.isOpened(),
             "model_loaded": self.model is not None,
             "model_path": str(settings.model_path),
+            "storage_enabled": settings.alerts_enabled,
             "detections": self.last_detections,
+            "recent_detections": recent_detections,
+            "current_alert": classify_alert(recent_detections),
+            "alert_status": self.alert_service.last_status,
         }

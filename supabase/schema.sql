@@ -12,7 +12,7 @@ create table if not exists perfiles_usuarios (
     numero varchar(15),
     foto_perfil_url text,
     rol varchar(20) not null
-        check (rol in ('PADREs', 'HIJOs')),
+        check (rol in ('PADREs', 'HIJOs', 'OTROS')),
     activo boolean default true,
     ultimo_login timestamp,
     created_at timestamp default now()
@@ -89,4 +89,3 @@ create policy "usuarios leen configuraciones propias"
 on configuraciones for select
 to authenticated
 using (auth.uid() = usuarios_id);
-

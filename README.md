@@ -38,6 +38,16 @@ seguridad_v2/
 
 ## Comandos usados / instalacion
 
+### Inicio recomendado
+
+Desde la raiz del proyecto:
+
+```powershell
+.\start_project.ps1
+```
+
+Este script valida `.env`, cierra procesos viejos en `8001` y `5173`, inicia FastAPI y luego inicia React/Vite.
+
 ### 1. Backend
 
 ```powershell
@@ -59,7 +69,7 @@ Edita `backend/.env` con tus datos de Supabase.
 Ejecutar backend:
 
 ```powershell
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
 ```
 
 ### 2. Frontend
@@ -94,9 +104,8 @@ evidencias
 2. El frontend consulta `perfiles_usuarios` para obtener rol y nombre.
 3. El panel muestra la camara de la laptop servida por FastAPI.
 4. FastAPI usa OpenCV para leer la camara y YOLOv8 para detectar objetos.
-5. Si detecta persona, cuchillo, arma u objeto sospechoso, guarda imagen y video corto.
-6. Sube los archivos a Supabase Storage.
-7. Inserta el evento en `eventos_sospechosos` con las rutas de evidencia.
+5. Detecta las clases del modelo actual: persona, arma de fuego, arma blanca, pasamontana, mascarilla y casco.
+6. En modo actual solo detecta y dibuja cajas; no guarda evidencias automaticamente.
 
 ## Variables importantes
 
@@ -109,7 +118,7 @@ SUPABASE_STORAGE_BUCKET=evidencias
 MODEL_PATH=models/best.pt
 CAMERA_INDEX=0
 DETECTION_CONFIDENCE=0.45
-SUSPICIOUS_LABELS=person,knife,pistol,gun,weapon,cuchillo,arma,persona
+SUSPICIOUS_LABELS=arma_de_fuego,arma_blanca,pasamontana,mascarilla,casco
 ```
 
 Frontend:
@@ -117,6 +126,5 @@ Frontend:
 ```env
 VITE_SUPABASE_URL=
 VITE_SUPABASE_ANON_KEY=
-VITE_API_URL=http://localhost:8000
+VITE_API_URL=http://127.0.0.1:8001
 ```
-
