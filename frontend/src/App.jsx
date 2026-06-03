@@ -80,25 +80,53 @@ const navItems = [
   { id: "configuracion", label: "Configuracion", icon: Settings },
 ];
 
+function formatApiError(detail) {
+  try {
+    const parsed = JSON.parse(detail);
+    if (typeof parsed.detail === "string") return parsed.detail;
+    if (parsed.detail?.message) return parsed.detail.message;
+    return JSON.stringify(parsed.detail || parsed);
+  } catch {
+    return detail || "Error de servidor";
+  }
+}
+
 async function apiFetch(path, session, options = {}) {
   const isFormData = options.body instanceof FormData;
   let lastError = null;
 
+  async function requestWithToken(baseUrl, accessToken) {
+    const response = await fetch(`${baseUrl}${path}`, {
+      ...options,
+      headers: {
+        ...(isFormData ? {} : { "Content-Type": "application/json" }),
+        Authorization: `Bearer ${accessToken}`,
+        ...(options.headers || {}),
+      },
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      const error = new Error(formatApiError(detail));
+      error.status = response.status;
+      throw error;
+    }
+    return response.json();
+  }
+
   for (const baseUrl of apiCandidates) {
     try {
-      const response = await fetch(`${baseUrl}${path}`, {
-        ...options,
-        headers: {
-          ...(isFormData ? {} : { "Content-Type": "application/json" }),
-          Authorization: `Bearer ${session.access_token}`,
-          ...(options.headers || {}),
-        },
-      });
-      if (!response.ok) {
-        const detail = await response.text();
-        throw new Error(detail || "Error de servidor");
+      try {
+        return await requestWithToken(baseUrl, session.access_token);
+      } catch (error) {
+        if (error.status !== 401) throw error;
+
+        const { data, error: refreshError } = await supabase.auth.refreshSession();
+        if (refreshError || !data.session?.access_token) {
+          await supabase.auth.signOut();
+          throw new Error("Sesion vencida. Vuelve a iniciar sesion.");
+        }
+        return await requestWithToken(baseUrl, data.session.access_token);
       }
-      return response.json();
     } catch (error) {
       lastError = error;
     }
@@ -236,8 +264,7 @@ function Dashboard({ session }) {
   const [telegramStatus, setTelegramStatus] = useState(null);
   const [config, setConfig] = useState(defaultConfig);
   const [configSaving, setConfigSaving] = useState(false);
-  const [cameraTick, setCameraTick] = useState(Date.now());
-  const streamUrl = useMemo(() => `${apiUrl}/camera/frame?t=${cameraTick}`, [cameraTick]);
+  const streamUrl = useMemo(() => `${apiUrl}/camera/frame`, []);
   const metadataRole = session.user?.user_metadata?.rol;
   const isParent = String(profile?.rol || metadataRole || "").trim().toUpperCase() === "PADRES";
   const visibleNavItems = useMemo(() => navItems.filter((item) => !item.parentOnly || isParent), [isParent]);
@@ -337,10 +364,8 @@ function Dashboard({ session }) {
       loadEvents();
       loadStatus();
     }, 5000);
-    const cameraTimer = setInterval(() => setCameraTick(Date.now()), 150);
     return () => {
       clearInterval(timer);
-      clearInterval(cameraTimer);
     };
   }, [session.user.id]);
 
@@ -1264,7 +1289,7 @@ function CameraTile({ camera, onExpand }) {
     <article className="overflow-hidden rounded border border-neutral-800 bg-neutral-950">
       <div className="relative bg-black">
         {camera.connected ? (
-          <img src={camera.streamUrl} alt={camera.name} className="aspect-video w-full object-contain" />
+          <LiveCameraImage streamUrl={camera.streamUrl} alt={camera.name} className="aspect-video w-full object-contain" intervalMs={900} />
         ) : (
           <div className="grid aspect-video place-items-center bg-[linear-gradient(135deg,#09090b,#171717)]">
             <div className="text-center">
@@ -1311,7 +1336,7 @@ function CameraFullscreen({ camera, onClose }) {
           </button>
         </div>
         <div className="grid min-h-0 flex-1 place-items-center overflow-hidden rounded border border-neutral-800 bg-black">
-          <img src={camera.streamUrl} alt={camera.name} className="max-h-full max-w-full object-contain" />
+          <LiveCameraImage streamUrl={camera.streamUrl} alt={camera.name} className="max-h-full max-w-full object-contain" intervalMs={650} />
         </div>
       </div>
     </div>
@@ -1544,8 +1569,37 @@ function SettingToggle({ title, detail, checked = true, onChange = () => {}, dis
 function CameraFrame({ streamUrl }) {
   return (
     <div className="overflow-hidden rounded border border-neutral-800 bg-black">
-      <img src={streamUrl} alt="Camara de seguridad" className="aspect-video w-full object-contain" />
+      <LiveCameraImage streamUrl={streamUrl} alt="Camara de seguridad" className="aspect-video w-full object-contain" intervalMs={900} />
     </div>
+  );
+}
+
+function LiveCameraImage({ streamUrl, alt, className, intervalMs = 900 }) {
+  const [src, setSrc] = useState(() => `${streamUrl}?t=${Date.now()}`);
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    setSrc(`${streamUrl}?t=${Date.now()}`);
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [streamUrl]);
+
+  function scheduleNext(delay = intervalMs) {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      setSrc(`${streamUrl}?t=${Date.now()}`);
+    }, delay);
+  }
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className={className}
+      onLoad={() => scheduleNext(intervalMs)}
+      onError={() => scheduleNext(1800)}
+    />
   );
 }
 
