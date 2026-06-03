@@ -25,6 +25,9 @@ class Settings:
     detection_iou: float = float(os.getenv("DETECTION_IOU", "0.70"))
     detection_max_det: int = int(os.getenv("DETECTION_MAX_DET", "100"))
     detection_frame_skip: int = int(os.getenv("DETECTION_FRAME_SKIP", "3"))
+    camera_stream_fps: float = float(os.getenv("CAMERA_STREAM_FPS", "12"))
+    camera_stream_width: int = int(os.getenv("CAMERA_STREAM_WIDTH", "960"))
+    camera_jpeg_quality: int = int(os.getenv("CAMERA_JPEG_QUALITY", "72"))
     test_detection_confidence: float = float(os.getenv("TEST_DETECTION_CONFIDENCE", "0.01"))
     test_detection_imgsz: int = int(os.getenv("TEST_DETECTION_IMGSZ", "1280"))
     suspicious_labels: set[str] = None

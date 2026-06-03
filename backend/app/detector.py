@@ -166,6 +166,7 @@ class CameraDetector:
 
     def stream(self):
         self.start()
+        frame_delay = 1 / max(1, settings.camera_stream_fps)
         try:
             while True:
                 jpeg = self.frame_jpeg()
@@ -179,7 +180,7 @@ class CameraDetector:
                     + jpeg
                     + b"\r\n"
                 )
-                time.sleep(0.12)
+                time.sleep(frame_delay)
         except GeneratorExit:
             return
 
@@ -193,7 +194,14 @@ class CameraDetector:
             with self.lock:
                 frame = self.last_frame.copy()
 
-        ok, encoded = cv2.imencode(".jpg", frame)
+        max_width = max(320, settings.camera_stream_width)
+        height, width = frame.shape[:2]
+        if width > max_width:
+            scale = max_width / width
+            frame = cv2.resize(frame, (max_width, int(height * scale)), interpolation=cv2.INTER_AREA)
+
+        quality = min(95, max(45, settings.camera_jpeg_quality))
+        ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
         if not ok:
             return None
         return encoded.tobytes()
