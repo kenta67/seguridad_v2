@@ -95,7 +95,7 @@ def _intersection_over_min_area(box_a, box_b):
 
 
 def _same_object(box_a, box_b):
-    return _iou(box_a, box_b) > 0.35 or _intersection_over_min_area(box_a, box_b) > 0.60
+    return _iou(box_a, box_b) > 0.20 or _intersection_over_min_area(box_a, box_b) > 0.45
 
 
 def _dedupe_detections(detections):
@@ -171,36 +171,18 @@ def _predict_test(frame, fast: bool = False):
         return _predict_fast(frame)
 
     model = _get_model()
-    class_ids = list(model.names.keys())
-    detections = []
 
     general_results = model.predict(
         frame,
         conf=settings.test_detection_confidence,
-        iou=0.80,
+        iou=0.55,
         imgsz=settings.test_detection_imgsz,
         max_det=settings.detection_max_det,
         agnostic_nms=False,
         augment=False,
         verbose=False,
     )
-    detections.extend(_results_to_detections(general_results))
-
-    for class_id in class_ids:
-        results = model.predict(
-            frame,
-            conf=settings.test_detection_confidence,
-            iou=0.80,
-            imgsz=settings.test_detection_imgsz,
-            max_det=settings.detection_max_det,
-            agnostic_nms=False,
-            augment=False,
-            classes=[class_id],
-            verbose=False,
-        )
-        detections.extend(_results_to_detections(results))
-
-    return _dedupe_detections(detections)
+    return _dedupe_detections(_results_to_detections(general_results))
 
 
 def _read_image(data: bytes):
