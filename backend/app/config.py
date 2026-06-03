@@ -47,5 +47,9 @@ class Settings:
             )
             object.__setattr__(self, "suspicious_labels", _labels(labels))
 
+    @property
+    def frontend_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.frontend_origin.split(",") if origin.strip()]
+
 
 settings = Settings()

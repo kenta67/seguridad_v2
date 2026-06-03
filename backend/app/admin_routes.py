@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import tempfile
 from typing import Any
 from pathlib import Path
@@ -14,6 +15,7 @@ from app.telegram_client import bot_username, get_updates, send_text, status as 
 
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+logger = logging.getLogger("seguridad.admin")
 
 
 class UserCreate(BaseModel):
@@ -88,7 +90,16 @@ def _request(method: str, path: str, **kwargs: Any) -> Any:
         **kwargs,
     )
     if response.status_code >= 400:
-        raise HTTPException(status_code=response.status_code, detail=response.text)
+        logger.warning("Supabase error method=%s path=%s status=%s body=%s", method, path, response.status_code, response.text[:1000])
+        if response.status_code in {401, 403}:
+            detail = "Operacion no autorizada en Supabase"
+        elif response.status_code == 409:
+            detail = "Registro duplicado o conflicto de datos"
+        elif response.status_code == 404:
+            detail = "Registro no encontrado"
+        else:
+            detail = "No se pudo completar la operacion en Supabase"
+        raise HTTPException(status_code=response.status_code, detail=detail)
     return response.json() if response.text else None
 
 
@@ -251,9 +262,13 @@ async def update_profile_photo(
     if not content_type.startswith("image/"):
         raise HTTPException(status_code=415, detail="El archivo debe ser una imagen.")
 
+    data = await file.read()
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="La imagen no debe superar 5 MB.")
+
     settings.alert_temp_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=settings.alert_temp_dir) as temp:
-        temp.write(await file.read())
+        temp.write(data)
         temp_path = Path(temp.name)
 
     try:

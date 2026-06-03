@@ -1,0 +1,15 @@
+backend/
+supabase/
+.qodo/
+.git/
+*.env
+*.env.*
+!*.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+frontend/dist/
+frontend/node_modules/
+node_modules/
+test_ia_ping.jpg
+*.log

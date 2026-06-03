@@ -38,6 +38,16 @@ seguridad_v2/
 
 ## Comandos usados / instalacion
 
+## Deploy
+
+Para Vercel, despliega solo el frontend. Revisa la guia:
+
+```txt
+DEPLOYMENT_VERCEL.md
+```
+
+El backend con FastAPI, OpenCV, camara local y YOLO debe correr en un servidor persistente con HTTPS y acceso a la camara.
+
 ### Inicio recomendado
 
 Desde la raiz del proyecto:
@@ -105,7 +115,7 @@ evidencias
 3. El panel muestra la camara de la laptop servida por FastAPI.
 4. FastAPI usa OpenCV para leer la camara y YOLOv8 para detectar objetos.
 5. Detecta las clases del modelo actual: persona, arma de fuego, arma blanca, pasamontana, mascarilla y casco.
-6. En modo actual solo detecta y dibuja cajas; no guarda evidencias automaticamente.
+6. Si detecta una alerta amarilla o roja, guarda evidencia en Supabase Storage, registra el evento y envia aviso por Telegram si esta habilitado.
 
 ## Variables importantes
 

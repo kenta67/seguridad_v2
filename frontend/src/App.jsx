@@ -31,9 +31,9 @@ import {
 import { supabase, supabaseConfigured } from "./lib/supabase";
 
 const apiUrl = import.meta.env.VITE_API_URL || "http://127.0.0.1:8001";
-const apiCandidates = Array.from(
-  new Set([apiUrl, "http://127.0.0.1:8001", "http://localhost:8001"]),
-);
+const apiCandidates = import.meta.env.DEV
+  ? Array.from(new Set([apiUrl, "http://127.0.0.1:8001", "http://localhost:8001"]))
+  : [apiUrl];
 const imageExtensions = [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"];
 const videoExtensions = [".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".wmv", ".mpeg", ".mpg", ".3gp"];
 
