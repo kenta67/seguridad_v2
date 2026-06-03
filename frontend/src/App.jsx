@@ -264,7 +264,7 @@ function Dashboard({ session }) {
   const [telegramStatus, setTelegramStatus] = useState(null);
   const [config, setConfig] = useState(defaultConfig);
   const [configSaving, setConfigSaving] = useState(false);
-  const streamUrl = useMemo(() => `${apiUrl}/camera/frame`, []);
+  const streamUrl = useMemo(() => `${apiUrl}/camera/stream`, []);
   const metadataRole = session.user?.user_metadata?.rol;
   const isParent = String(profile?.rol || metadataRole || "").trim().toUpperCase() === "PADRES";
   const visibleNavItems = useMemo(() => navItems.filter((item) => !item.parentOnly || isParent), [isParent]);
@@ -1229,6 +1229,7 @@ function CamerasPanel({ status, streamUrl }) {
     name: `Camara ${index + 1}`,
     location: index === 0 ? "Laptop local" : "Canal sin asignar",
     connected: index === 0 && Boolean(status?.camera_open),
+    suspended: expandedCamera === index + 1,
     streamUrl: index === 0 ? streamUrl : null,
   }));
   const activeCamera = cameras.find((camera) => camera.id === expandedCamera);
@@ -1288,8 +1289,8 @@ function CameraTile({ camera, onExpand }) {
   return (
     <article className="overflow-hidden rounded border border-neutral-800 bg-neutral-950">
       <div className="relative bg-black">
-        {camera.connected ? (
-          <LiveCameraImage streamUrl={camera.streamUrl} alt={camera.name} className="aspect-video w-full object-contain" intervalMs={900} />
+        {camera.connected && !camera.suspended ? (
+          <CameraStreamImage streamUrl={camera.streamUrl} alt={camera.name} className="aspect-video w-full object-contain" />
         ) : (
           <div className="grid aspect-video place-items-center bg-[linear-gradient(135deg,#09090b,#171717)]">
             <div className="text-center">
@@ -1300,7 +1301,7 @@ function CameraTile({ camera, onExpand }) {
         )}
         <div className="absolute left-3 top-3 flex items-center gap-2 rounded bg-black/70 px-2 py-1 text-xs">
           <span className={`h-2 w-2 rounded-full ${camera.connected ? "bg-emerald-400" : "bg-neutral-600"}`} />
-          {camera.connected ? "En vivo" : "Desconectada"}
+          {camera.connected ? (camera.suspended ? "Vista ampliada" : "En vivo") : "Desconectada"}
         </div>
         <button
           className="absolute right-3 top-3 grid h-9 w-9 place-items-center rounded bg-black/70 text-neutral-100 transition hover:bg-emerald-400 hover:text-neutral-950 disabled:cursor-not-allowed disabled:opacity-50"
@@ -1336,7 +1337,7 @@ function CameraFullscreen({ camera, onClose }) {
           </button>
         </div>
         <div className="grid min-h-0 flex-1 place-items-center overflow-hidden rounded border border-neutral-800 bg-black">
-          <LiveCameraImage streamUrl={camera.streamUrl} alt={camera.name} className="max-h-full max-w-full object-contain" intervalMs={650} />
+          <CameraStreamImage streamUrl={camera.streamUrl} alt={camera.name} className="max-h-full max-w-full object-contain" />
         </div>
       </div>
     </div>
@@ -1569,36 +1570,24 @@ function SettingToggle({ title, detail, checked = true, onChange = () => {}, dis
 function CameraFrame({ streamUrl }) {
   return (
     <div className="overflow-hidden rounded border border-neutral-800 bg-black">
-      <LiveCameraImage streamUrl={streamUrl} alt="Camara de seguridad" className="aspect-video w-full object-contain" intervalMs={900} />
+      <CameraStreamImage streamUrl={streamUrl} alt="Camara de seguridad" className="aspect-video w-full object-contain" />
     </div>
   );
 }
 
-function LiveCameraImage({ streamUrl, alt, className, intervalMs = 900 }) {
-  const [src, setSrc] = useState(() => `${streamUrl}?t=${Date.now()}`);
-  const timerRef = useRef(null);
+function CameraStreamImage({ streamUrl, alt, className }) {
+  const [src, setSrc] = useState(streamUrl);
 
   useEffect(() => {
-    setSrc(`${streamUrl}?t=${Date.now()}`);
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
+    setSrc(streamUrl);
   }, [streamUrl]);
-
-  function scheduleNext(delay = intervalMs) {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
-      setSrc(`${streamUrl}?t=${Date.now()}`);
-    }, delay);
-  }
 
   return (
     <img
       src={src}
       alt={alt}
       className={className}
-      onLoad={() => scheduleNext(intervalMs)}
-      onError={() => scheduleNext(1800)}
+      onError={() => setTimeout(() => setSrc(`${streamUrl}?retry=${Date.now()}`), 2500)}
     />
   );
 }

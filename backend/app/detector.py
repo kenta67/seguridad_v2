@@ -166,18 +166,22 @@ class CameraDetector:
 
     def stream(self):
         self.start()
-        while True:
-            jpeg = self.frame_jpeg()
-            if jpeg is None:
-                time.sleep(0.1)
-                continue
+        try:
+            while True:
+                jpeg = self.frame_jpeg()
+                if jpeg is None:
+                    time.sleep(0.1)
+                    continue
 
-            yield (
-                b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n\r\n"
-                + jpeg
-                + b"\r\n"
-            )
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n"
+                    + jpeg
+                    + b"\r\n"
+                )
+                time.sleep(0.12)
+        except GeneratorExit:
+            return
 
     def frame_jpeg(self):
         self.start()
